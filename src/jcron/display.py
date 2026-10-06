@@ -52,7 +52,7 @@ def full(job: Job, at: datetime) -> str:
 def due_report(jobs: list[Job], at: datetime) -> str:
     if not jobs:
         return "No jobs need attention."
-    lines = [f"jcron: {len(jobs)} job(s) need attention. Claim a job before working on it, and read its notes first."]
+    lines = [f"jcron: {len(jobs)} job(s) need attention. Tell the user what is due and ask before claiming any job."]
     for job in jobs:
         lines.append(f"- {job.id} [{job.kind}] {job.title} ({place(job)}): {reason(job, at)}")
     return "\n".join(lines)

@@ -26,7 +26,9 @@ Working on a due job:
 - Each job records a folder and, optionally, a git branch.
 - Act on a job only when it belongs to the current work (same folder, and same branch if one is set).
 - For due jobs that belong elsewhere, tell the user about them briefly and leave them alone.
-- Call `claim` before starting, so no other session takes the same job, then read its notes.
+- Never claim a job on your own. Tell the user what is due (use `show` to read the notes) and ask whether to take it on now.
+- Only when the user says yes, call `claim`, so no other session takes the same job.
+- If the user says not now, offer to `snooze` it. Otherwise leave it for another session.
 - When finished, call `done` with a short note on the outcome. For a repeat job this schedules the next run.
 - If you cannot finish, call `release` (or `snooze` to a later time) with a note on what you learned.
 
@@ -34,7 +36,8 @@ Check jobs:
 - A check job has a plain-text condition, such as "PR 42 on jcron is merged".
 - When one is due, test the condition with your own tools (gh, a Jira MCP, a web page, and so on).
 - Then call `check` with met=true or met=false. met=false schedules the next check.
-- met=true turns the job into a due task: do what its notes say, then call `done`.
+- Testing a condition needs no claim and no confirmation.
+- met=true turns the job into a due task. Ask the user before claiming it and doing what its notes say, then call `done`.
 - If you have no way to test the condition, tell the user rather than guessing.
 
 Scheduling new jobs:
@@ -125,7 +128,7 @@ def due() -> str:
 
 @tool()
 def claim(id: str) -> str:
-    """Claim a job before working on it, so no other session takes it. Returns the full job."""
+    """Claim a job so no other session takes it. Only call this after the user has agreed to work on the job now. Returns the full job."""
     job = store.claim(id, SESSION)
     return f"Claimed by {SESSION}.\n" + display.full(job, now())
 
