@@ -12,7 +12,7 @@ import yaml
 
 from .timeparse import to_local
 
-KINDS = ("reminder", "repeat", "check")
+KINDS = ("reminder", "repeat", "check", "todo")
 TIME_FIELDS = ("created", "due", "expires", "condition_met", "claimed_at", "last_done", "finished")
 TEXT_FIELDS = ("id", "kind", "title", "status", "folder", "branch", "repeat", "condition", "check_every", "claimed_by")
 

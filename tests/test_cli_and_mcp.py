@@ -49,5 +49,22 @@ def test_mcp_server_lists_tools_and_instructions():
     from jcron import mcp_server as m
 
     names = {t.name for t in asyncio.run(m.mcp.list_tools())}
-    assert {"add", "list", "show", "due", "claim", "release", "done", "check", "snooze", "cancel", "edit"} <= names
-    assert "Call `due` at the start of a session" in m.mcp.instructions
+    assert {"add", "list", "show", "due", "claim", "release", "done", "check", "snooze", "cancel", "edit", "todos"} <= names
+    assert "At the start of a session, call `due`" in m.mcp.instructions
+
+
+def test_mcp_todo_round_trip(tmp_path):
+    from jcron import mcp_server as m
+
+    assert "Added" in m.add("todo", "Tidy the README", notes="shorten the intro", folder=str(tmp_path))
+    job_id = only_job_id()
+    assert job_id in m.due(folder=str(tmp_path))
+    assert job_id in m.todos(folder=str(tmp_path))
+    assert m.todos(folder=str(tmp_path.parent)) == "No TODOs."
+    assert "Done" in m.done(job_id)
+
+
+def test_cli_global_todo(capsys, tmp_path):
+    code, out, _ = run(capsys, "add", "todo", "Renew the cert", "--global", "--folder", str(tmp_path))
+    assert code == 0 and "[todo]" in out
+    assert "Renew the cert" in run(capsys, "todos", "--folder", str(tmp_path / "anywhere"))[1]

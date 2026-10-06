@@ -14,6 +14,8 @@ from .model import KINDS, Job, make_id
 from .timeparse import fmt, now, parse_duration
 
 CLAIM_TIMEOUT = timedelta(hours=4)
+TODO_EXPIRY = timedelta(days=30)
+TODO_WARNING = timedelta(days=3)
 
 
 class JcronError(Exception):
@@ -95,6 +97,15 @@ def is_abandoned(job: Job, at: datetime) -> bool:
     return where(job) == "claimed" and (job.claimed_at is None or at - job.claimed_at >= CLAIM_TIMEOUT)
 
 
+def todo_state(job: Job, at: datetime) -> str:
+    """For a TODO: expired, expiring (within the warning window) or todo."""
+    if job.expires is not None and job.expires <= at:
+        return "expired"
+    if job.expires is not None and job.expires - at <= TODO_WARNING:
+        return "expiring"
+    return "todo"
+
+
 def find(job_id: str, include_done: bool = False) -> Job:
     """Find a job by its id or by a unique start of its id."""
     paths.ensure()
@@ -128,8 +139,30 @@ def due_jobs(at: datetime | None = None) -> list[Job]:
     return sorted(ready + abandoned, key=lambda j: j.due or at)
 
 
+def todos(folder: str | None = None, at: datetime | None = None) -> list[Job]:
+    """Waiting TODOs for a folder or any folder above it, plus global ones (all TODOs when no folder is given), soonest expiry first."""
+    at = at or now()
+    paths.ensure()
+    wanted = _folder_parts(str(Path(folder).resolve())) if folder else None
+    found = [
+        j for j in _load_dir(paths.jobs_dir())
+        if j.kind == "todo" and (wanted is None or j.folder is None or _is_within(wanted, _folder_parts(j.folder)))
+    ]
+    return sorted(found, key=lambda j: (j.expires is None, j.expires or at))
+
+
+def _folder_parts(folder: str) -> list[str]:
+    return [part.lower() for part in Path(folder).parts]
+
+
+def _is_within(inner: list[str], outer: list[str]) -> bool:
+    # Compare whole folder names, so "proj" never matches "proj-old".
+    return inner[:len(outer)] == outer
+
+
 def sweep(at: datetime | None = None) -> None:
-    """Move check jobs past their expiry into done/."""
+    """Move check jobs past their expiry into done/.
+    Expired TODOs stay, because only the user can confirm their removal."""
     at = at or now()
     paths.ensure()
     candidates = _load_dir(paths.jobs_dir()) + [j for j in _load_dir(paths.claimed_dir()) if is_abandoned(j, at)]
@@ -183,12 +216,15 @@ def add(
     notes: str = "",
     folder: str | None = None,
     branch: str | None = None,
+    global_todo: bool = False,
     base: datetime | None = None,
 ) -> Job:
     if kind not in KINDS:
         raise JcronError(f"kind must be one of {', '.join(KINDS)}")
     if not title.strip():
         raise JcronError("a job needs a title")
+    if global_todo and kind != "todo":
+        raise JcronError("only TODOs can be global")
     base = base or now()
     paths.ensure()
     job = Job(id=_new_id(title), kind=kind, title=title.strip(), created=base, folder=folder, branch=branch, notes=notes)
@@ -202,6 +238,12 @@ def add(
         schedule.validate_cron(cron)
         job.repeat = cron
         job.due = at or schedule.next_cron(cron, base)
+    elif kind == "todo":
+        if at is not None:
+            raise JcronError("a TODO has no due time; set when it expires instead (expires)")
+        job.expires = expires or base + TODO_EXPIRY
+        if global_todo:
+            job.folder = None
     else:
         if not condition or not every:
             raise JcronError("a check job needs a condition and a check interval (every)")
@@ -213,7 +255,7 @@ def add(
     if job.notes and not job.notes.endswith("\n"):
         job.notes += "\n"
     _write(job, paths.jobs_dir() / f"{job.id}.yaml")
-    log("add", job, f"kind={kind} due={fmt(job.due)}", at=base)
+    log("add", job, f"kind={kind} " + (f"expires={fmt(job.expires)}" if kind == "todo" else f"due={fmt(job.due)}"), at=base)
     return job
 
 
@@ -299,6 +341,8 @@ def check(job_id: str, met: bool, notes: str | None = None, at: datetime | None 
 def snooze(job_id: str, until: datetime, notes: str | None = None, at: datetime | None = None) -> Job:
     at = at or now()
     job = find(job_id)
+    if job.kind == "todo":
+        raise JcronError("a TODO has no due time to snooze; extend it with edit (expires) instead")
     _append_note(job, "snoozed", notes, at)
     job.due = until
     if where(job) == "claimed":
@@ -356,9 +400,9 @@ def edit(
         if at is None:
             job.due = schedule.next_cron(cron, when)
         changed.append("cron")
-    if condition is not None or every is not None or expires is not None:
+    if condition is not None or every is not None:
         if job.kind != "check":
-            raise JcronError("only check jobs have a condition, interval or expiry")
+            raise JcronError("only check jobs have a condition or interval")
         if condition is not None:
             job.condition = condition
             changed.append("condition")
@@ -366,10 +410,14 @@ def edit(
             parse_duration(every)
             job.check_every = every
             changed.append("every")
-        if expires is not None:
-            job.expires = expires
-            changed.append("expires")
+    if expires is not None:
+        if job.kind not in ("check", "todo"):
+            raise JcronError("only check jobs and TODOs have an expiry")
+        job.expires = expires
+        changed.append("expires")
     if at is not None:
+        if job.kind == "todo":
+            raise JcronError("a TODO has no due time; change when it expires instead (expires)")
         job.due = at
         changed.append("due")
     if folder is not None:

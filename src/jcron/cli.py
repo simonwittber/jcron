@@ -42,6 +42,7 @@ def cmd_add(args) -> None:
         notes=_notes(args) or "",
         folder=folder,
         branch=branch,
+        global_todo=args.global_todo,
     )
     print(f"Added {display.line(job, now())}")
 
@@ -67,12 +68,21 @@ def cmd_due(args) -> None:
         from . import hook
 
         stdin_text = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.buffer.read().decode("utf-8", "replace")
-        output = hook.run(stdin_text)
+        output = hook.respond(stdin_text)
         if output:
             print(output)
         return
     at = now()
     print(display.due_report(store.due_jobs(at), at))
+    todo_text = display.todo_report(store.todos(os.getcwd(), at), at)
+    if todo_text:
+        print(f"\n{todo_text}")
+
+
+def cmd_todos(args) -> None:
+    at = now()
+    found = store.todos(None if args.all else args.folder or os.getcwd(), at)
+    print(display.table(found, at) if found else "No TODOs.")
 
 
 def cmd_claim(args) -> None:
@@ -163,9 +173,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cron", help="repeat jobs: cron rule, for example '0 9 * * 1-5'")
     p.add_argument("--condition", help="check jobs: what has to be true, in plain words")
     p.add_argument("--every", help="check jobs: how often to check, for example 30m or 2h")
-    p.add_argument("--expires", help="check jobs: when to give up")
+    p.add_argument("--expires", help="check jobs: when to give up; TODOs: when to expire (default: in 30 days)")
     p.add_argument("--folder", help="project folder (default: current directory)")
     p.add_argument("--branch", help="git branch (default: current branch, if any)")
+    p.add_argument("--global", dest="global_todo", action="store_true", help="TODOs: show in every folder")
     _add_notes_options(p)
     p.set_defaults(func=cmd_add)
 
@@ -181,6 +192,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("due", help="list jobs that need attention")
     p.add_argument("--hook", action="store_true", help="Claude Code hook mode: read the event from stdin, print only new due jobs")
     p.set_defaults(func=cmd_due)
+
+    p = sub.add_parser("todos", help="list TODOs for this folder plus global ones")
+    p.add_argument("--folder", help="folder to list TODOs for (default: current directory)")
+    p.add_argument("--all", action="store_true", help="list every TODO")
+    p.set_defaults(func=cmd_todos)
 
     for name, func, text in (
         ("claim", cmd_claim, "claim a job so no other session takes it"),

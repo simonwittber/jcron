@@ -2,7 +2,7 @@
 
 Scheduling for agent sessions: work that waits for your next session, in whichever tool you open.
 
-jcron lets an LLM schedule reminders, repeating tasks and condition checks, then pick them up in a later session.
+jcron lets an LLM schedule reminders, repeating tasks, condition checks and TODOs, then pick them up in a later session.
 Jobs are plain YAML files in `~/.jcron/`, so people can read and edit them too.
 
 ## Why
@@ -75,6 +75,7 @@ jcron install-hook
 The hook runs `jcron due --hook` on `SessionStart` and `UserPromptSubmit`.
 It reads local files only, runs in a fraction of a second, and prints nothing when no new jobs are due.
 Each due job is reported once per session, and again after a session start, resume or compaction.
+When something is due, you see a one-line summary in the terminal straight away, and the LLM gets the full list.
 
 ## Set up opencode
 
@@ -102,6 +103,24 @@ Ask "anything due in jcron?" to check by hand.
 - **reminder:** due once, at a set time.
 - **repeat:** due on a cron rule, such as `0 9 * * 1-5` (9am on weekdays). Finishing one run schedules the next.
 - **check:** a plain-text condition, such as "PR 42 is merged", checked on an interval. The LLM tests the condition with its own tools and reports back. Once the condition is met, the job becomes a normal due task.
+- **todo:** something to do some time, with no due time. It belongs to a folder, or is global. It expires after 30 days unless you give another time.
+
+## TODOs
+
+Start a message with `todo:` and the LLM adds a TODO, for example:
+
+```
+todo: the hook test is flaky on Windows, look into it
+todo: global, renew the code signing cert
+```
+
+- The LLM writes the title and notes from the conversation, so a later session knows what to do and why.
+- A TODO belongs to the current folder, and also shows in sessions started in any folder inside it. It is global only when your wording says so, and then it shows in every folder.
+- The git branch is always recorded, for context.
+- At session start, the hook (or a `due` call) lists TODOs for the current folder, any folder above it, and global ones. With more than 3, it shows a count and the LLM asks whether to list them.
+- TODOs that expire within 3 days are always listed, with a warning. The LLM offers to extend them.
+- An expired TODO is never removed on its own. It is listed every session until you confirm, then the LLM cancels it (or extends it).
+- Working on a TODO follows the same steps as any job: the LLM asks before claiming it.
 
 ## Commands
 
@@ -109,7 +128,9 @@ Ask "anything due in jcron?" to check by hand.
 jcron add reminder "Look at CI" --at "tomorrow 9am" --notes "..."
 jcron add repeat "Standup notes" --cron "0 9 * * 1-5"
 jcron add check "Delete branch" --condition "PR 42 is merged" --every 30m --expires "in 2 weeks" --notes "..."
+jcron add todo "Fix the flaky hook test" [--expires "in 2 weeks"] [--global] --notes "..."
 jcron list [--all] [--folder X]
+jcron todos [--folder X] [--all]
 jcron show <id>
 jcron due
 jcron claim <id>
@@ -126,7 +147,7 @@ jcron edit <id> [--title ...] [--append ...] [--at ...] ...
 - `--notes-file path` (or `-` for stdin) reads long notes from a file.
 - `add` records the current folder and git branch. `--folder` and `--branch` override them.
 
-The MCP server exposes the same actions as tools: `add`, `list`, `show`, `due`, `claim`, `release`, `done`, `check`, `snooze`, `cancel` and `edit`.
+The MCP server exposes the same actions as tools: `add`, `list`, `show`, `due`, `claim`, `release`, `done`, `check`, `snooze`, `cancel`, `edit` and `todos`.
 Its instructions tell the LLM when to check for due jobs and how to work through them.
 
 ## Storage
@@ -145,6 +166,7 @@ Set `JCRON_HOME` to use a different folder.
 - A session claims a job (after you agree) by renaming its file, so two sessions cannot take the same job.
 - A claim older than 4 hours counts as abandoned, and the job shows up as due again.
 - Check jobs past their expiry move to `done/` with status `expired`.
+- Expired TODOs stay in `jobs/` until you confirm their removal.
 - Unknown keys added by hand are kept when jcron saves a job.
 
 Example job file:

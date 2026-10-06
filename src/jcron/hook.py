@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from datetime import datetime
 from pathlib import Path
 
 from . import paths, store
-from .display import due_report
+from .display import due_report, todo_report
 from .model import Job
 from .timeparse import fmt, now
 
@@ -32,15 +33,52 @@ def _prune_seen() -> None:
             pass
 
 
-def run(stdin_text: str, at: datetime | None = None) -> str:
-    """Return the text to add to the session, or an empty string when nothing new is due."""
-    at = at or now()
+def _parse_event(stdin_text: str) -> dict:
     try:
         event = json.loads(stdin_text) if stdin_text.strip() else {}
     except ValueError:
         event = {}
-    if not isinstance(event, dict):
-        event = {}
+    return event if isinstance(event, dict) else {}
+
+
+def run(stdin_text: str, at: datetime | None = None) -> str:
+    """Return the text to add to the session, or an empty string when nothing new is due."""
+    at = at or now()
+    jobs, todos = _gather(_parse_event(stdin_text), at)
+    return _text(jobs, todos, at)
+
+
+def respond(stdin_text: str, at: datetime | None = None) -> str:
+    """Return the hook's JSON output: the full report for the model, plus a one-line summary shown to the user.
+    Returns an empty string when nothing new is due."""
+    at = at or now()
+    event = _parse_event(stdin_text)
+    jobs, todos = _gather(event, at)
+    if not jobs and not todos:
+        return ""
+    counts = []
+    if jobs:
+        counts.append(f"{len(jobs)} job(s) due")
+    if todos:
+        counts.append(f"{len(todos)} TODO(s) for this folder")
+    return json.dumps({
+        "systemMessage": f"jcron: {', '.join(counts)}.",
+        "hookSpecificOutput": {
+            "hookEventName": event.get("hook_event_name") or "UserPromptSubmit",
+            "additionalContext": _text(jobs, todos, at),
+        },
+    })
+
+
+def _text(jobs: list[Job], todos: list[Job], at: datetime) -> str:
+    reports = [due_report(jobs, at)] if jobs else []
+    if todos:
+        reports.append(todo_report(todos, at))
+    return "\n\n".join(reports)
+
+
+def _gather(event: dict, at: datetime) -> tuple[list[Job], list[Job]]:
+    """The due jobs this session has not been told about yet, and the TODOs to list (at session start only)."""
     jobs = store.due_jobs(at)
     session = event.get("session_id")
     if session:
@@ -54,7 +92,9 @@ def run(stdin_text: str, at: datetime | None = None) -> str:
             with seen_path.open("a", encoding="utf-8") as f:
                 f.write("".join(k + "\n" for k in new_keys))
         _prune_seen()
-    return due_report(jobs, at) if jobs else ""
+    # TODOs are listed at session start only, so they do not nag on every prompt.
+    todos = store.todos(event.get("cwd") or os.getcwd(), at) if event.get("hook_event_name") == "SessionStart" else []
+    return jobs, todos
 
 
 def install(settings_path: Path, command: str, confirm) -> str:

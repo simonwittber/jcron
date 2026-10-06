@@ -44,6 +44,15 @@ def test_no_stdin_reports_every_time():
     assert hook.run("", T0)
 
 
+def test_respond_gives_model_the_report_and_user_a_summary():
+    job = store.add("reminder", "look at CI", at=T0, base=T0)
+    out = json.loads(hook.respond(event("SessionStart"), T0))
+    assert out["systemMessage"] == "jcron: 1 job(s) due."
+    assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    assert job.id in out["hookSpecificOutput"]["additionalContext"]
+    assert hook.respond(event(), T0) == ""
+
+
 def test_install_adds_hooks_once(tmp_path):
     settings = tmp_path / "settings.json"
     settings.write_text(json.dumps({"model": "opus"}), encoding="utf-8")

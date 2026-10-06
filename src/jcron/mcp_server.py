@@ -15,12 +15,13 @@ from .store import JcronError
 from .timeparse import now, parse_when
 
 INSTRUCTIONS = """\
-jcron stores reminders, repeating tasks and condition checks that carry work from one session to a later one.
+jcron stores reminders, repeating tasks, condition checks and TODOs that carry work from one session to a later one.
 Jobs are YAML files in ~/.jcron/, and every session sees every job.
 
 When to look:
-- Call `due` at the start of a session.
-- Call `due` again whenever a message starting with "jcron:" appears, listing jobs that need attention.
+- At the start of a session, call `due`, passing your current working directory as `folder`.
+- Skip that call when a message starting with "jcron:" has already listed what is due: that message holds what `due` would return.
+- Act on each "jcron:" message directly, and use `show` to read a job's notes. Call `due` only when the user asks for the full list again.
 
 Working on a due job:
 - Each job records a folder and, optionally, a git branch.
@@ -39,6 +40,17 @@ Check jobs:
 - Testing a condition needs no claim and no confirmation.
 - met=true turns the job into a due task. Ask the user before claiming it and doing what its notes say, then call `done`.
 - If you have no way to test the condition, tell the user rather than guessing.
+
+TODOs:
+- A message starting with "todo:" asks you to add a TODO: call `add` with kind="todo".
+- Write the title and notes from the conversation, so a fresh session can act on it: what to do, why, the files and links involved.
+- A TODO belongs to the current folder. Set global_todo=true only when the user's wording says it is not tied to this project.
+- A TODO expires after 30 days, unless the user gives another time in `expires`.
+- At session start, `due` and the hook list the TODOs for the current folder plus global ones. Pass them on to the user briefly.
+- When there are more than 3, only a count is shown. Ask the user whether to show them, then call `todos`.
+- Warn the user about TODOs that expire within 3 days, and offer to extend them with `edit` (expires).
+- Never remove an expired TODO on your own. Ask the user, then `cancel` it with a note, or extend it with `edit`.
+- Working on a TODO follows the same rules as a due job: ask before `claim`, then call `done`.
 
 Scheduling new jobs:
 - Add a job when the user asks to be reminded, wants something done later or on a schedule, or work has to wait for something outside the session (a review, a ticket, a build).
@@ -75,7 +87,7 @@ def _when(text: str | None):
 
 @tool()
 def add(
-    kind: Literal["reminder", "repeat", "check"],
+    kind: Literal["reminder", "repeat", "check", "todo"],
     title: str,
     notes: str = "",
     at: str | None = None,
@@ -85,19 +97,22 @@ def add(
     expires: str | None = None,
     folder: str | None = None,
     branch: str | None = None,
+    global_todo: bool = False,
 ) -> str:
     """Schedule a job for a later session.
 
     kind: "reminder" (due once at `at`), "repeat" (due on the `cron` rule, e.g. "0 9 * * 1-5"),
-    or "check" (test the plain-text `condition` every `every`, e.g. "30m"; optional `expires`).
+    "check" (test the plain-text `condition` every `every`, e.g. "30m"; optional `expires`),
+    or "todo" (no due time; listed at session start; `expires` defaults to 30 days).
     notes: everything a fresh session needs to act; for check jobs, what to do once the condition is met.
     at: "in 2h", "tomorrow 9am" or an ISO time. For check jobs it sets the first check (default: now + every).
     folder: your current working directory. branch: defaults to the folder's current git branch.
+    global_todo: true for a TODO that is not tied to one project; it then shows in every folder.
     """
     folder, branch = store.detect_folder_branch(folder, branch)
     job = store.add(
         kind, title, at=_when(at), cron=cron, condition=condition, every=every,
-        expires=_when(expires), notes=notes, folder=folder, branch=branch,
+        expires=_when(expires), notes=notes, folder=folder, branch=branch, global_todo=global_todo,
     )
     return f"Added: {display.line(job, now())}"
 
@@ -120,10 +135,21 @@ def show(id: str) -> str:
 
 
 @tool()
-def due() -> str:
-    """List jobs that need attention now: due reminders and repeats, check jobs ready to test, and abandoned claims."""
+def due(folder: str | None = None) -> str:
+    """List jobs that need attention now: due reminders and repeats, check jobs ready to test, and abandoned claims.
+    Also lists the TODOs for `folder` (your current working directory) plus global ones."""
     at = now()
-    return display.due_report(store.due_jobs(at), at)
+    todo_text = display.todo_report(store.todos(folder or os.getcwd(), at), at)
+    return display.due_report(store.due_jobs(at), at) + (f"\n\n{todo_text}" if todo_text else "")
+
+
+@tool()
+def todos(folder: str | None = None, all_folders: bool = False) -> str:
+    """List TODOs for `folder` (your current working directory) plus global ones, soonest expiry first.
+    all_folders lists every TODO instead."""
+    at = now()
+    found = store.todos(None if all_folders else folder or os.getcwd(), at)
+    return display.table(found, at) if found else "No TODOs."
 
 
 @tool()
