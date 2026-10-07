@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import yaml
 
 from . import paths, schedule
 from .model import KINDS, Job, make_id
@@ -26,7 +29,10 @@ class JcronError(Exception):
 
 
 def _read(path: Path) -> Job:
-    return Job.from_yaml(path.read_text(encoding="utf-8"), path)
+    try:
+        return Job.from_yaml(path.read_text(encoding="utf-8"), path)
+    except yaml.YAMLError as e:
+        raise JcronError(f"could not read {path}: {e}") from None
 
 
 def _write(job: Job, path: Path) -> None:
@@ -108,6 +114,9 @@ def todo_state(job: Job, at: datetime) -> str:
 
 def find(job_id: str, include_done: bool = False) -> Job:
     """Find a job by its id or by a unique start of its id."""
+    # Allow only id characters, so an id can never point at a file outside the store.
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):
+        raise JcronError(f"not a job id: {job_id!r}")
     paths.ensure()
     folders = [paths.jobs_dir(), paths.claimed_dir()] + ([paths.done_dir()] if include_done else [])
     for folder in folders:
@@ -173,6 +182,13 @@ def sweep(at: datetime | None = None) -> None:
             job.finished = at
             _move(job, paths.done_dir())
             log("expire", job, at=at)
+
+
+def _check_interval(every: str) -> timedelta:
+    interval = parse_duration(every)
+    if interval <= timedelta(0):
+        raise JcronError(f"the check interval must be longer than zero: {every!r}")
+    return interval
 
 
 def _new_id(title: str) -> str:
@@ -247,7 +263,7 @@ def add(
     else:
         if not condition or not every:
             raise JcronError("a check job needs a condition and a check interval (every)")
-        interval = parse_duration(every)
+        interval = _check_interval(every)
         job.condition = condition
         job.check_every = every
         job.due = at or base + interval
@@ -407,7 +423,7 @@ def edit(
             job.condition = condition
             changed.append("condition")
         if every is not None:
-            parse_duration(every)
+            _check_interval(every)
             job.check_every = every
             changed.append("every")
     if expires is not None:

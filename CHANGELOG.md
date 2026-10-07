@@ -3,6 +3,13 @@
 All notable changes to jcron are listed here.
 Each release on GitHub also has notes generated from its commits.
 
+## Unreleased
+
+### Fixed
+- A broken job file now gives a one-line error naming the file, instead of a traceback.
+- Job ids may only contain letters, digits, `_` and `-`, so an id can no longer point at a file outside `~/.jcron/`.
+- A check job's interval (`every`) must be longer than zero.
+
 ## 0.1.0 (2026-10-06)
 
 ### Added

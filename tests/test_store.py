@@ -174,3 +174,26 @@ def test_move_leaves_one_copy():
     store.done(job.id)
     assert not old.exists()
     assert (paths.done_dir() / f"{job.id}.yaml").exists()
+
+
+@pytest.mark.parametrize("bad_id", ["", "../outside/job", "C:/elsewhere/job", "*", "job[1]", ".hidden"])
+def test_find_rejects_ids_that_are_not_ids(bad_id):
+    add_reminder()
+    with pytest.raises(JcronError, match="not a job id"):
+        store.find(bad_id)
+
+
+def test_broken_job_file_gives_a_readable_error():
+    job = add_reminder()
+    job.path.write_text("id: x\nkind: [\n", encoding="utf-8")
+    with pytest.raises(JcronError, match="could not read"):
+        store.find(job.id)
+
+
+@pytest.mark.parametrize("every", ["0m", "0h0m"])
+def test_check_interval_must_be_longer_than_zero(every):
+    with pytest.raises(JcronError, match="longer than zero"):
+        store.add("check", "x", condition="y", every=every, base=T0)
+    job = store.add("check", "x", condition="y", every="30m", base=T0)
+    with pytest.raises(JcronError, match="longer than zero"):
+        store.edit(job.id, every=every, when=T0)
