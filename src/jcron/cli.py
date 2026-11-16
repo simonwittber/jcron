@@ -73,8 +73,9 @@ def cmd_due(args) -> None:
             print(output)
         return
     at = now()
-    print(display.due_report(store.due_jobs(at), at))
-    todo_text = display.todo_report(store.todos(os.getcwd(), at), at)
+    here = None if args.all else store.Here(os.getcwd())
+    print(display.due_report(store.due_jobs(at, here), at))
+    todo_text = display.todo_report(store.todos(here, at), at)
     if todo_text:
         print(f"\n{todo_text}")
 
@@ -189,12 +190,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id")
     p.set_defaults(func=cmd_show)
 
-    p = sub.add_parser("due", help="list jobs that need attention")
+    p = sub.add_parser("due", help="list jobs that need attention in this repo (or this folder, outside git)")
     p.add_argument("--hook", action="store_true", help="Claude Code hook mode: read the event from stdin, print only new due jobs")
+    p.add_argument("--all", action="store_true", help="list due jobs and TODOs from every repo and folder")
     p.set_defaults(func=cmd_due)
 
-    p = sub.add_parser("todos", help="list TODOs for this folder plus global ones")
-    p.add_argument("--folder", help="folder to list TODOs for (default: current directory)")
+    p = sub.add_parser("todos", help="list TODOs for this repo plus global ones")
+    p.add_argument("--folder", help="list TODOs for this folder's repo (default: current directory)")
     p.add_argument("--all", action="store_true", help="list every TODO")
     p.set_defaults(func=cmd_todos)
 

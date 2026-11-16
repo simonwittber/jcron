@@ -75,7 +75,7 @@ def todo_report(todos: list[Job], at: datetime) -> str:
     """The TODOs shown at session start: all of them when there are few, otherwise only the ones near or past expiry."""
     if not todos:
         return ""
-    lines = [f"jcron: {len(todos)} TODO(s) for this folder or global. Tell the user about them, and ask before claiming any."]
+    lines = [f"jcron: {len(todos)} TODO(s) for this repo or global. Tell the user about them, and ask before claiming any."]
     rest = []
     for job in todos:
         state = todo_state(job, at)

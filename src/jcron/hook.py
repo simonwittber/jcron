@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import paths, store
+from . import paths, stale, store
 from .display import due_report, todo_report
 from .model import Job
 from .timeparse import fmt, now
@@ -44,8 +44,8 @@ def _parse_event(stdin_text: str) -> dict:
 def run(stdin_text: str, at: datetime | None = None) -> str:
     """Return the text to add to the session, or an empty string when nothing new is due."""
     at = at or now()
-    jobs, todos = _gather(_parse_event(stdin_text), at)
-    return _text(jobs, todos, at)
+    jobs, todos, stale_found = _gather(_parse_event(stdin_text), at)
+    return _text(jobs, todos, stale_found, at)
 
 
 def respond(stdin_text: str, at: datetime | None = None) -> str:
@@ -53,33 +53,39 @@ def respond(stdin_text: str, at: datetime | None = None) -> str:
     Returns an empty string when nothing new is due."""
     at = at or now()
     event = _parse_event(stdin_text)
-    jobs, todos = _gather(event, at)
-    if not jobs and not todos:
+    jobs, todos, stale_found = _gather(event, at)
+    if not jobs and not todos and not stale_found:
         return ""
     counts = []
     if jobs:
         counts.append(f"{len(jobs)} job(s) due")
     if todos:
-        counts.append(f"{len(todos)} TODO(s) for this folder")
+        counts.append(f"{len(todos)} TODO(s) for this repo")
+    if stale_found:
+        counts.append(f"weekly cleanup, {len(stale_found)} stale job(s) to review")
     return json.dumps({
         "systemMessage": f"jcron: {', '.join(counts)}.",
         "hookSpecificOutput": {
             "hookEventName": event.get("hook_event_name") or "UserPromptSubmit",
-            "additionalContext": _text(jobs, todos, at),
+            "additionalContext": _text(jobs, todos, stale_found, at),
         },
     })
 
 
-def _text(jobs: list[Job], todos: list[Job], at: datetime) -> str:
+def _text(jobs: list[Job], todos: list[Job], stale_found: list, at: datetime) -> str:
     reports = [due_report(jobs, at)] if jobs else []
     if todos:
         reports.append(todo_report(todos, at))
+    if stale_found:
+        reports.append(stale.report(stale_found))
     return "\n\n".join(reports)
 
 
-def _gather(event: dict, at: datetime) -> tuple[list[Job], list[Job]]:
-    """The due jobs this session has not been told about yet, and the TODOs to list (at session start only)."""
-    jobs = store.due_jobs(at)
+def _gather(event: dict, at: datetime) -> tuple[list[Job], list[Job], list]:
+    """The due jobs for this repo that this session has not been told about yet.
+    At session start only, also the TODOs to list and, once a week, the stale jobs from every folder."""
+    here = store.Here(event.get("cwd") or os.getcwd())
+    jobs = store.due_jobs(at, here)
     session = event.get("session_id")
     if session:
         seen_path = paths.seen_dir() / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', str(session))}.txt"
@@ -92,9 +98,10 @@ def _gather(event: dict, at: datetime) -> tuple[list[Job], list[Job]]:
             with seen_path.open("a", encoding="utf-8") as f:
                 f.write("".join(k + "\n" for k in new_keys))
         _prune_seen()
-    # TODOs are listed at session start only, so they do not nag on every prompt.
-    todos = store.todos(event.get("cwd") or os.getcwd(), at) if event.get("hook_event_name") == "SessionStart" else []
-    return jobs, todos
+    # TODOs and the stale report are listed at session start only, so they do not nag on every prompt.
+    if event.get("hook_event_name") != "SessionStart":
+        return jobs, [], []
+    return jobs, store.todos(here, at), stale.weekly(at)
 
 
 def install(settings_path: Path, command: str, confirm) -> str:

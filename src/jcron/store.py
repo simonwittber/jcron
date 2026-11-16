@@ -139,34 +139,74 @@ def list_jobs(include_done: bool = False, errors: list[str] | None = None, at: d
     return sorted(jobs, key=lambda j: (j.due is None, j.due or at))
 
 
-def due_jobs(at: datetime | None = None) -> list[Job]:
-    """Jobs whose time has come, plus claimed jobs whose session seems to have gone away."""
+def due_jobs(at: datetime | None = None, here: str | Here | None = None) -> list[Job]:
+    """Jobs whose time has come, plus claimed jobs whose session seems to have gone away.
+    With `here` (a folder), only the jobs that belong to that folder's repo."""
     at = at or now()
     sweep(at)
     ready = [j for j in _load_dir(paths.jobs_dir()) if j.due is not None and j.due <= at]
     abandoned = [j for j in _load_dir(paths.claimed_dir()) if is_abandoned(j, at)]
-    return sorted(ready + abandoned, key=lambda j: j.due or at)
+    found = ready + abandoned
+    if here is not None:
+        here = Here.of(here)
+        found = [j for j in found if here.has(j)]
+    return sorted(found, key=lambda j: j.due or at)
 
 
-def todos(folder: str | None = None, at: datetime | None = None) -> list[Job]:
-    """Waiting TODOs for a folder or any folder above it, plus global ones (all TODOs when no folder is given), soonest expiry first."""
+def todos(here: str | Here | None = None, at: datetime | None = None) -> list[Job]:
+    """Waiting TODOs for a folder's repo, plus global ones (all TODOs when no folder is given), soonest expiry first."""
     at = at or now()
     paths.ensure()
-    wanted = _folder_parts(str(Path(folder).resolve())) if folder else None
-    found = [
-        j for j in _load_dir(paths.jobs_dir())
-        if j.kind == "todo" and (wanted is None or j.folder is None or _is_within(wanted, _folder_parts(j.folder)))
-    ]
+    here = Here.of(here) if here is not None else None
+    found = [j for j in _load_dir(paths.jobs_dir()) if j.kind == "todo" and (here is None or here.has(j))]
     return sorted(found, key=lambda j: (j.expires is None, j.expires or at))
 
 
-def _folder_parts(folder: str) -> list[str]:
-    return [part.lower() for part in Path(folder).parts]
+def _same_folder(a: str, b: str) -> bool:
+    return [part.lower() for part in Path(a).parts] == [part.lower() for part in Path(b).parts]
 
 
-def _is_within(inner: list[str], outer: list[str]) -> bool:
-    # Compare whole folder names, so "proj" never matches "proj-old".
-    return inner[:len(outer)] == outer
+def repo_of(folder: str) -> str | None:
+    """The git common folder for a folder, which is the same for a repo's main checkout and all its worktrees.
+    None outside git, or when the folder is gone."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", folder, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = result.stdout.strip()
+    return str(Path(out).resolve()) if result.returncode == 0 and out else None
+
+
+class Here:
+    """Where a session runs, and which jobs belong to it.
+    Inside git, a job belongs when it is for the same repo, whatever its branch, worktree or subfolder.
+    Outside git, a job belongs only to its exact folder."""
+
+    def __init__(self, folder: str):
+        self.folder = str(Path(folder).resolve())
+        self.repo = repo_of(self.folder)
+        # Repos worked out for older jobs that were saved without one, so each folder costs one git call.
+        self._repos: dict[str, str | None] = {}
+
+    @classmethod
+    def of(cls, here: str | Here) -> Here:
+        return here if isinstance(here, Here) else cls(here)
+
+    def has(self, job: Job) -> bool:
+        # A job with no folder is global, such as a global TODO.
+        if job.folder is None:
+            return True
+        job_repo = job.repo
+        if job_repo is None:
+            if job.folder not in self._repos:
+                self._repos[job.folder] = repo_of(job.folder)
+            job_repo = self._repos[job.folder]
+        if self.repo is not None:
+            return job_repo is not None and _same_folder(job_repo, self.repo)
+        return job_repo is None and _same_folder(job.folder, self.folder)
 
 
 def sweep(at: datetime | None = None) -> None:
@@ -244,6 +284,7 @@ def add(
     base = base or now()
     paths.ensure()
     job = Job(id=_new_id(title), kind=kind, title=title.strip(), created=base, folder=folder, branch=branch, notes=notes)
+    job.repo = repo_of(folder) if folder and not global_todo else None
     if kind == "reminder":
         if at is None:
             raise JcronError("a reminder needs a time (at)")
@@ -438,6 +479,7 @@ def edit(
         changed.append("due")
     if folder is not None:
         job.folder = str(Path(folder).resolve())
+        job.repo = repo_of(job.folder)
         changed.append("folder")
     if branch is not None:
         job.branch = branch or None

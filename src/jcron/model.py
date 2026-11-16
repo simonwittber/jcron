@@ -14,7 +14,7 @@ from .timeparse import to_local
 
 KINDS = ("reminder", "repeat", "check", "todo")
 TIME_FIELDS = ("created", "due", "expires", "condition_met", "claimed_at", "last_done", "finished")
-TEXT_FIELDS = ("id", "kind", "title", "status", "folder", "branch", "repeat", "condition", "check_every", "claimed_by")
+TEXT_FIELDS = ("id", "kind", "title", "status", "folder", "branch", "repo", "repeat","condition", "check_every", "claimed_by")
 
 
 @dataclass
@@ -26,7 +26,9 @@ class Job:
     created: datetime | None = None
     folder: str | None = None
     branch: str | None = None
-    due: datetime | None = None
+    # The git common folder, shared by a repo's main checkout and all its worktrees; None outside git.
+    repo: str | None = None
+    due:datetime | None = None
     repeat: str | None = None
     condition: str | None = None
     check_every: str | None = None

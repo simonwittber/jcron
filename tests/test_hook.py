@@ -7,8 +7,8 @@ from jcron.timeparse import to_local
 T0 = to_local(datetime(2026, 10, 6, 12, 0, 0))
 
 
-def event(name="UserPromptSubmit", session="abc-123"):
-    return json.dumps({"session_id": session, "hook_event_name": name})
+def event(name="UserPromptSubmit", session="abc-123", cwd=None):
+    return json.dumps({"session_id": session, "hook_event_name": name, **({"cwd": cwd} if cwd else {})})
 
 
 def test_nothing_due_prints_nothing():
@@ -16,12 +16,19 @@ def test_nothing_due_prints_nothing():
     assert hook.run(event(), T0) == ""
 
 
-def test_due_job_is_reported_once_per_session():
-    job = store.add("reminder", "look at CI", at=T0, base=T0, folder="C:/proj", branch="main")
-    first = hook.run(event(), T0)
+def test_due_job_is_reported_once_per_session(tmp_path):
+    job = store.add("reminder", "look at CI", at=T0, base=T0, folder=str(tmp_path), branch="main")
+    first = hook.run(event(cwd=str(tmp_path)), T0)
     assert job.id in first and "branch: main" in first
-    assert hook.run(event(), T0 + timedelta(minutes=1)) == ""
-    assert job.id in hook.run(event(session="other"), T0)
+    assert hook.run(event(cwd=str(tmp_path)), T0 + timedelta(minutes=1)) == ""
+    assert job.id in hook.run(event(session="other", cwd=str(tmp_path)), T0)
+
+
+def test_due_job_for_another_folder_is_not_reported(tmp_path):
+    store.add("reminder", "look at CI", at=T0, base=T0, folder=str(tmp_path / "proj"))
+    (tmp_path / "other").mkdir()
+    assert hook.run(event(cwd=str(tmp_path / "other")), T0) == ""
+    assert hook.run(event("SessionStart", cwd=str(tmp_path / "other")), T0) == ""
 
 
 def test_session_start_repeats_everything():

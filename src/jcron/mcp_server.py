@@ -10,13 +10,20 @@ from typing import Literal
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import display, store
+from . import display, stale, store
 from .store import JcronError
 from .timeparse import now, parse_when
 
 INSTRUCTIONS = """\
 jcron stores reminders, repeating tasks, condition checks and TODOs that carry work from one session to a later one.
-Jobs are YAML files in ~/.jcron/, and every session sees every job.
+Jobs are YAML files in ~/.jcron/.
+
+Where jobs belong:
+- Each job belongs to a git repo: its main checkout, all its worktrees, every branch and every subfolder.
+- Outside git, a job belongs to its exact folder only.
+- A job also records the folder and branch it was added from. These are for information only.
+- `due` and the hook list only the jobs for the repo you are in, so every job they list belongs to the current work.
+- Do not mention or act on jobs from other repos, except in the weekly cleanup below.
 
 When to look:
 - At the start of a session, call `due`, passing your current working directory as `folder`.
@@ -24,9 +31,6 @@ When to look:
 - Act on each "jcron:" message directly, and use `show` to read a job's notes. Call `due` only when the user asks for the full list again.
 
 Working on a due job:
-- Each job records a folder and, optionally, a git branch.
-- Act on a job only when it belongs to the current work (same folder, and same branch if one is set).
-- For due jobs that belong elsewhere, tell the user about them briefly and leave them alone.
 - Never claim a job on your own. Tell the user what is due (use `show` to read the notes) and ask whether to take it on now.
 - Only when the user says yes, call `claim`, so no other session takes the same job.
 - If the user says not now, offer to `snooze` it. Otherwise leave it for another session.
@@ -46,11 +50,17 @@ TODOs:
 - Write the title and notes from the conversation, so a fresh session can act on it: what to do, why, the files and links involved.
 - A TODO belongs to the current folder. Set global_todo=true only when the user's wording says it is not tied to this project.
 - A TODO expires after 30 days, unless the user gives another time in `expires`.
-- At session start, `due` and the hook list the TODOs for the current folder plus global ones. Pass them on to the user briefly.
+- At session start, `due` and the hook list the TODOs for the current repo plus global ones. Pass them on to the user briefly.
 - When there are more than 3, only a count is shown. Ask the user whether to show them, then call `todos`.
 - Warn the user about TODOs that expire within 3 days, and offer to extend them with `edit` (expires).
 - Never remove an expired TODO on your own. Ask the user, then `cancel` it with a note, or extend it with `edit`.
 - Working on a TODO follows the same rules as a due job: ask before `claim`, then call `done`.
+
+Weekly cleanup:
+- Once a week, the first session start (or `due` call) lists stale jobs from every repo and folder.
+- A job is stale when its folder or branch is gone, it is more than 14 days overdue, or it is an expired TODO.
+- Show the list to the user and ask about each job: `cancel` it, `edit` it, or keep it.
+- Change nothing without the user's answer, and do not start work on these jobs here.
 
 Scheduling new jobs:
 - Add a job when the user asks to be reminded, wants something done later or on a schedule, or work has to wait for something outside the session (a review, a ticket, a build).
@@ -135,17 +145,20 @@ def show(id: str) -> str:
 
 
 @tool()
-def due(folder: str | None = None) -> str:
-    """List jobs that need attention now: due reminders and repeats, check jobs ready to test, and abandoned claims.
-    Also lists the TODOs for `folder` (your current working directory) plus global ones."""
+def due(folder: str | None = None, all_folders: bool = False) -> str:
+    """List jobs for the repo of `folder` (your current working directory) that need attention now:
+    due reminders and repeats, check jobs ready to test, and abandoned claims.
+    Also lists the repo's TODOs plus global ones, and once a week the stale jobs from every folder.
+    all_folders lists due jobs and TODOs from every repo and folder instead."""
     at = now()
-    todo_text = display.todo_report(store.todos(folder or os.getcwd(), at), at)
-    return display.due_report(store.due_jobs(at), at) + (f"\n\n{todo_text}" if todo_text else "")
+    here = None if all_folders else store.Here(folder or os.getcwd())
+    reports = [display.due_report(store.due_jobs(at, here), at), display.todo_report(store.todos(here, at), at), stale.report(stale.weekly(at))]
+    return "\n\n".join(r for r in reports if r)
 
 
 @tool()
 def todos(folder: str | None = None, all_folders: bool = False) -> str:
-    """List TODOs for `folder` (your current working directory) plus global ones, soonest expiry first.
+    """List TODOs for the repo of `folder` (your current working directory) plus global ones, soonest expiry first.
     all_folders lists every TODO instead."""
     at = now()
     found = store.todos(None if all_folders else folder or os.getcwd(), at)

@@ -49,9 +49,10 @@ def test_todos_match_folder_plus_global():
     assert len(store.todos(None, T0)) == 3
 
 
-def test_todos_show_in_subfolders_only():
+def test_todos_outside_git_match_the_exact_folder_only():
     job = add_todo(folder=str(paths.home() / "proj"))
-    assert [j.id for j in store.todos(str(paths.home() / "proj" / "src" / "deep"), T0)] == [job.id]
+    assert [j.id for j in store.todos(str(paths.home() / "proj"), T0)] == [job.id]
+    assert store.todos(str(paths.home() / "proj" / "src" / "deep"), T0) == []
     assert store.todos(str(paths.home()), T0) == []
     assert store.todos(str(paths.home() / "proj-old"), T0) == []
 

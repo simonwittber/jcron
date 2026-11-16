@@ -14,11 +14,15 @@ def only_job_id():
     return next(paths.jobs_dir().glob("*.yaml")).stem
 
 
-def test_cli_round_trip(capsys, tmp_path):
+def test_cli_round_trip(capsys, tmp_path, monkeypatch):
     code, out, _ = run(capsys, "add", "reminder", "Check the build", "--at", "now", "--notes", "see CI page", "--folder", str(tmp_path))
     assert code == 0 and "Added" in out
     job_id = only_job_id()
+    monkeypatch.chdir(tmp_path)
     assert job_id in run(capsys, "due")[1]
+    monkeypatch.chdir(tmp_path.parent)
+    assert job_id not in run(capsys, "due")[1]
+    assert job_id in run(capsys, "due", "--all")[1]
     assert "see CI page" in run(capsys, "show", job_id[:6])[1]
     assert "Claimed" in run(capsys, "claim", job_id, "--session", "me")[1]
     assert run(capsys, "done", job_id, "--notes", "green")[0] == 0
@@ -38,7 +42,9 @@ def test_mcp_tools_round_trip(tmp_path):
     added = m.add("check", "Ship it", notes="merge and tag", condition="PR 7 approved", every="1h", at="now", folder=str(tmp_path))
     assert "Added" in added
     job_id = only_job_id()
-    assert "test the condition: PR 7 approved" in m.due()
+    assert "test the condition: PR 7 approved" in m.due(folder=str(tmp_path))
+    assert job_id not in m.due(folder=str(tmp_path.parent))
+    assert job_id in m.due(folder=str(tmp_path.parent), all_folders=True)
     assert "Claimed by mcp-" in m.claim(job_id)
     assert "Condition met" in m.check(job_id, True)
     assert "Done" in m.done(job_id, "tagged v1")

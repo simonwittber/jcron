@@ -5,6 +5,15 @@ Each release on GitHub also has notes generated from its commits.
 
 ## Unreleased
 
+### Changed
+- Jobs belong to a git repo: its main checkout, worktrees, branches and subfolders. Outside git, a job belongs to its exact folder.
+- The hook and `due` list only the current repo's jobs and TODOs. Sessions in other repos are no longer told about them.
+- Jobs record the repo they were added in (`repo`). Older jobs without it are matched through their folder.
+
+### Added
+- A weekly cleanup report at session start lists stale jobs from every repo: folder gone, branch gone, more than 14 days overdue, or an expired TODO. The user decides what to do with each one.
+- `jcron due --all`, and `all_folders` on the MCP `due` tool, list due jobs from every repo and folder.
+
 ### Fixed
 - A broken job file now gives a one-line error naming the file, instead of a traceback.
 - Job ids may only contain letters, digits, `_` and `-`, so an id can no longer point at a file outside `~/.jcron/`.
