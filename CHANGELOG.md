@@ -3,7 +3,7 @@
 All notable changes to jcron are listed here.
 Each release on GitHub also has notes generated from its commits.
 
-## Unreleased
+## 0.2.0 (2026-11-16)
 
 ### Changed
 - Jobs belong to a git repo: its main checkout, worktrees, branches and subfolders. Outside git, a job belongs to its exact folder.
