@@ -19,6 +19,7 @@ from .timeparse import fmt, now, parse_duration
 CLAIM_TIMEOUT = timedelta(hours=4)
 TODO_EXPIRY = timedelta(days=30)
 TODO_WARNING = timedelta(days=3)
+FINISHED = ("done", "cancelled", "expired")
 
 
 class JcronError(Exception):
@@ -48,6 +49,10 @@ def _save(job: Job) -> None:
 
 
 def _move(job: Job, folder: Path) -> None:
+    if is_shared(job):
+        # A shared job stays in the repo and only changes status, so the change can be committed.
+        _write(job, job.path)
+        return
     target = folder / f"{job.id}.yaml"
     old = job.path
     if old is None or old == target:
@@ -99,6 +104,49 @@ def where(job: Job) -> str:
     return job.path.parent.name if job.path else "jobs"
 
 
+def is_shared(job: Job) -> bool:
+    """Whether the job lives in a repo's .jcron/ folder instead of ~/.jcron/."""
+    return job.path is not None and job.path.parent.name == paths.SHARED_DIRNAME
+
+
+def is_finished(job: Job) -> bool:
+    """Whether the job is done, cancelled or expired (a shared job keeps its file, so it is told by status)."""
+    return where(job) == "done" or (is_shared(job) and job.status in FINISHED)
+
+
+def shared_dir(folder: str | Path) -> Path | None:
+    """The .jcron/ folder in the checkout that holds `folder`; None outside git.
+    Each worktree has its own checkout, so each has its own shared jobs."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(folder), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = result.stdout.strip()
+    return Path(out) / paths.SHARED_DIRNAME if result.returncode == 0 and out else None
+
+
+def _load_shared(folder: Path | None, errors: list[str] | None = None) -> list[Job]:
+    return _load_dir(folder, errors) if folder is not None and folder.is_dir() else []
+
+
+def _is_finished_shared(path: Path) -> bool:
+    if path.parent.name != paths.SHARED_DIRNAME:
+        return False
+    try:
+        return _read(path).status in FINISHED
+    except Exception:  # An unreadable file is reported when it is read for real.
+        return False
+
+
+def finished_shared(here: str | Here) -> list[Job]:
+    """Shared jobs in this checkout that are finished, so their files can be deleted."""
+    here = Here.of(here)
+    return [j for j in _load_shared(here.shared) if j.status in FINISHED]
+
+
 def is_abandoned(job: Job, at: datetime) -> bool:
     return where(job) == "claimed" and (job.claimed_at is None or at - job.claimed_at >= CLAIM_TIMEOUT)
 
@@ -119,11 +167,15 @@ def find(job_id: str, include_done: bool = False) -> Job:
         raise JcronError(f"not a job id: {job_id!r}")
     paths.ensure()
     folders = [paths.jobs_dir(), paths.claimed_dir()] + ([paths.done_dir()] if include_done else [])
+    # Shared jobs of the repo the session is in are found too; finished ones only when asked for.
+    shared = shared_dir(os.getcwd())
+    if shared is not None and shared.is_dir():
+        folders.append(shared)
     for folder in folders:
         exact = folder / f"{job_id}.yaml"
-        if exact.exists():
+        if exact.exists() and (include_done or not _is_finished_shared(exact)):
             return _read(exact)
-    matches = [p for folder in folders for p in folder.glob(f"{job_id}*.yaml")]
+    matches = [p for folder in folders for p in folder.glob(f"{job_id}*.yaml") if include_done or not _is_finished_shared(p)]
     if len(matches) == 1:
         return _read(matches[0])
     if not matches:
@@ -136,6 +188,7 @@ def list_jobs(include_done: bool = False, errors: list[str] | None = None, at: d
     sweep(at)
     folders = [paths.jobs_dir(), paths.claimed_dir()] + ([paths.done_dir()] if include_done else [])
     jobs = [job for folder in folders for job in _load_dir(folder, errors)]
+    jobs += [j for j in _load_shared(shared_dir(os.getcwd()), errors) if include_done or j.status not in FINISHED]
     return sorted(jobs, key=lambda j: (j.due is None, j.due or at))
 
 
@@ -150,6 +203,8 @@ def due_jobs(at: datetime | None = None, here: str | Here | None = None) -> list
     if here is not None:
         here = Here.of(here)
         found = [j for j in found if here.has(j)]
+        # Shared jobs belong to the checkout they are committed in, so they show only for a folder in it.
+        found += [j for j in _load_shared(here.shared) if j.status not in FINISHED and j.due is not None and j.due <= at]
     return sorted(found, key=lambda j: j.due or at)
 
 
@@ -159,6 +214,8 @@ def todos(here: str | Here | None = None, at: datetime | None = None) -> list[Jo
     paths.ensure()
     here = Here.of(here) if here is not None else None
     found = [j for j in _load_dir(paths.jobs_dir()) if j.kind == "todo" and (here is None or here.has(j))]
+    if here is not None:
+        found += [j for j in _load_shared(here.shared) if j.kind == "todo" and j.status not in FINISHED]
     return sorted(found, key=lambda j: (j.expires is None, j.expires or at))
 
 
@@ -188,6 +245,8 @@ class Here:
     def __init__(self, folder: str):
         self.folder = str(Path(folder).resolve())
         self.repo = repo_of(self.folder)
+        # The .jcron/ folder of this checkout, where its shared jobs are committed.
+        self.shared = shared_dir(self.folder)
         # Repos worked out for older jobs that were saved without one, so each folder costs one git call.
         self._repos: dict[str, str | None] = {}
 
@@ -231,11 +290,12 @@ def _check_interval(every: str) -> timedelta:
     return interval
 
 
-def _new_id(title: str) -> str:
+def _new_id(title: str, shared: Path | None = None) -> str:
     # Pick again if the id is taken, so a new job never overwrites an old one.
+    folders = [paths.jobs_dir(), paths.claimed_dir(), paths.done_dir()] + ([shared] if shared else [])
     while True:
         job_id = make_id(title)
-        if not any((folder / f"{job_id}.yaml").exists() for folder in (paths.jobs_dir(), paths.claimed_dir(), paths.done_dir())):
+        if not any((folder / f"{job_id}.yaml").exists() for folder in folders):
             return job_id
 
 
@@ -273,6 +333,7 @@ def add(
     folder: str | None = None,
     branch: str | None = None,
     global_todo: bool = False,
+    shared: bool = False,
     base: datetime | None = None,
 ) -> Job:
     if kind not in KINDS:
@@ -281,10 +342,21 @@ def add(
         raise JcronError("a job needs a title")
     if global_todo and kind != "todo":
         raise JcronError("only TODOs can be global")
+    if shared and global_todo:
+        raise JcronError("a shared job belongs to a repo, so it cannot be global")
     base = base or now()
     paths.ensure()
-    job = Job(id=_new_id(title), kind=kind, title=title.strip(), created=base, folder=folder, branch=branch, notes=notes)
+    shared_folder = None
+    if shared:
+        shared_folder = shared_dir(folder or os.getcwd())
+        if shared_folder is None:
+            raise JcronError("a shared job needs a git repo")
+    job = Job(id=_new_id(title, shared_folder), kind=kind, title=title.strip(), created=base, folder=folder, branch=branch, notes=notes)
     job.repo = repo_of(folder) if folder and not global_todo else None
+    if shared:
+        # Folder and repo are paths on this machine, so a job shared with other people does not record them.
+        job.folder = None
+        job.repo = None
     if kind == "reminder":
         if at is None:
             raise JcronError("a reminder needs a time (at)")
@@ -311,7 +383,9 @@ def add(
         job.expires = expires
     if job.notes and not job.notes.endswith("\n"):
         job.notes += "\n"
-    _write(job, paths.jobs_dir() / f"{job.id}.yaml")
+    if shared_folder is not None:
+        shared_folder.mkdir(exist_ok=True)
+    _write(job, (shared_folder or paths.jobs_dir()) / f"{job.id}.yaml")
     log("add", job, f"kind={kind} " + (f"expires={fmt(job.expires)}" if kind == "todo" else f"due={fmt(job.due)}"), at=base)
     return job
 
@@ -319,6 +393,9 @@ def add(
 def claim(job_id: str, session: str, at: datetime | None = None) -> Job:
     at = at or now()
     job = find(job_id)
+    if is_shared(job):
+        # A claim would only dirty the checkout. With one or two devs, telling the user first is enough.
+        return job
     if where(job) == "claimed" and job.claimed_by != session and not is_abandoned(job, at):
         raise JcronError(f"{job.id} is already claimed by {job.claimed_by} since {fmt(job.claimed_at)}")
 

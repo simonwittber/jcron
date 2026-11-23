@@ -5,13 +5,13 @@ from __future__ import annotations
 from datetime import datetime
 
 from .model import Job
-from .store import is_abandoned, todo_state, where
+from .store import is_abandoned, is_finished, is_shared, todo_state, where
 from .timeparse import human
 
 
 def state(job: Job, at: datetime) -> str:
     folder = where(job)
-    if folder == "done":
+    if is_finished(job):
         return job.status
     if folder == "claimed":
         return "abandoned" if is_abandoned(job, at) else "claimed"
@@ -34,12 +34,15 @@ def reason(job: Job, at: datetime) -> str:
 
 
 def place(job: Job) -> str:
-    text = f"folder: {job.folder}" if job.folder else "global"
+    if is_shared(job):
+        text = "shared in this repo"
+    else:
+        text = f"folder: {job.folder}" if job.folder else "global"
     return f"{text}, branch: {job.branch}" if job.branch else text
 
 
 def _when(job: Job, at: datetime) -> str:
-    if where(job) == "done" and job.finished:
+    if is_finished(job) and job.finished:
         return human(job.finished, at)
     if job.kind == "todo" and job.expires:
         return f"expires {human(job.expires, at)}"
@@ -65,6 +68,18 @@ def due_report(jobs: list[Job], at: datetime) -> str:
     lines = [f"jcron: {len(jobs)} job(s) need attention. Tell the user what is due and ask before claiming any job."]
     for job in jobs:
         lines.append(f"- {job.id} [{job.kind}] {job.title} ({place(job)}): {reason(job, at)}")
+    return "\n".join(lines)
+
+
+def finished_report(jobs: list[Job]) -> str:
+    """Shared jobs that are finished: their files stay in the repo until the user deletes them."""
+    if not jobs:
+        return ""
+    lines = [
+        f"jcron: {len(jobs)} finished shared job file(s) in this repo's .jcron/ folder. "
+        "Tell the user. Once they have committed the finished state and say so, delete the file. Never commit anything yourself."
+    ]
+    lines += [f"- {job.id} [{job.status}] {job.title}: {job.path}" for job in jobs]
     return "\n".join(lines)
 
 

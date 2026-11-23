@@ -56,6 +56,13 @@ TODOs:
 - Never remove an expired TODO on your own. Ask the user, then `cancel` it with a note, or extend it with `edit`.
 - Working on a TODO follows the same rules as a due job: ask before `claim`, then call `done`.
 
+Shared jobs:
+- A shared job is a YAML file in the repo's .jcron/ folder, committed with the branch, so a dev who checks out the branch gets it.
+- Add one only when the user asks for a job to travel with the branch or be handled by another dev: call `add` with shared=true.
+- It works like any job. There is no claim for it: tell the user, then work on it once they agree.
+- `done` marks the file as done and keeps it. The user commits that change, then the file is deleted in a later commit.
+- Never commit anything. When `due` lists finished shared jobs, tell the user, and delete a file only after they say it is committed.
+
 Weekly cleanup:
 - Once a week, the first session start (or `due` call) lists stale jobs from every repo and folder.
 - A job is stale when its folder or branch is gone, it is more than 14 days overdue, or it is an expired TODO.
@@ -108,6 +115,7 @@ def add(
     folder: str | None = None,
     branch: str | None = None,
     global_todo: bool = False,
+    shared: bool = False,
 ) -> str:
     """Schedule a job for a later session.
 
@@ -118,13 +126,15 @@ def add(
     at: "in 2h", "tomorrow 9am" or an ISO time. For check jobs it sets the first check (default: now + every).
     folder: your current working directory. branch: defaults to the folder's current git branch.
     global_todo: true for a TODO that is not tied to one project; it then shows in every folder.
+    shared: true to save the job in the repo's .jcron/ folder, so it travels with the branch and another dev can pick it up.
+    Only when the user asks for a job to be shared with the branch or other devs. The user commits the file.
     """
     folder, branch = store.detect_folder_branch(folder, branch)
     job = store.add(
         kind, title, at=_when(at), cron=cron, condition=condition, every=every,
-        expires=_when(expires), notes=notes, folder=folder, branch=branch, global_todo=global_todo,
+        expires=_when(expires), notes=notes, folder=folder, branch=branch, global_todo=global_todo, shared=shared,
     )
-    return f"Added: {display.line(job, now())}"
+    return f"Added: {display.line(job, now())}" + (f"\nSaved in {job.path}. The user commits it with the branch." if shared else "")
 
 
 @tool(name="list")
@@ -152,7 +162,8 @@ def due(folder: str | None = None, all_folders: bool = False) -> str:
     all_folders lists due jobs and TODOs from every repo and folder instead."""
     at = now()
     here = None if all_folders else store.Here(folder or os.getcwd())
-    reports = [display.due_report(store.due_jobs(at, here), at), display.todo_report(store.todos(here, at), at), stale.report(stale.weekly(at))]
+    finished = display.finished_report(store.finished_shared(here)) if here is not None else ""
+    reports = [display.due_report(store.due_jobs(at, here), at), display.todo_report(store.todos(here, at), at), finished, stale.report(stale.weekly(at))]
     return "\n\n".join(r for r in reports if r)
 
 

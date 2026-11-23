@@ -42,6 +42,20 @@ What jcron does not do:
 - Global TODOs show in every session.
 - `jcron list` and `jcron due --all` still show everything.
 
+## Shared jobs
+
+Some jobs belong to a branch, not to one person, and another dev may pick them up later.
+Add one with `--shared` (or `shared=true` on the MCP `add` tool) and it is saved in the repo's `.jcron/` folder instead of `~/.jcron/`.
+
+- You commit the file with the branch. Anyone who checks out the branch sees the job when it is due.
+- A shared job is listed only for the checkout that holds the file. Each worktree has its own.
+- It does not record the folder or repo, since those are paths on one machine.
+- There is no claim for a shared job. The session tells you what is due and asks before working on it.
+- `done` marks the file as done and keeps it. You commit that change, so the other dev sees it is finished.
+- At session start, finished shared jobs are listed as ready to delete. Once the done state is committed, delete the file and commit that.
+- jcron and the LLM never commit. You do.
+- Shared check jobs do not expire on their own. Cancel one that is no longer needed.
+
 ## Weekly cleanup
 
 Jobs that only show in their own repo can be forgotten, so once a week jcron lists the stale ones from every repo and folder.
@@ -152,6 +166,7 @@ jcron add reminder "Look at CI" --at "tomorrow 9am" --notes "..."
 jcron add repeat "Standup notes" --cron "0 9 * * 1-5"
 jcron add check "Delete branch" --condition "PR 42 is merged" --every 30m --expires "in 2 weeks" --notes "..."
 jcron add todo "Fix the flaky hook test" [--expires "in 2 weeks"] [--global] --notes "..."
+jcron add reminder "Promote the build" --at "in 2 weeks" --shared --notes "..."
 jcron list [--all] [--folder X]
 jcron todos [--folder X] [--all]
 jcron show <id>

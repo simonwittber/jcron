@@ -3,6 +3,12 @@
 All notable changes to jcron are listed here.
 Each release on GitHub also has notes generated from its commits.
 
+## Unreleased
+
+### Added
+- Shared jobs: `jcron add --shared` (and `shared=true` on the MCP `add` tool) saves a job in the repo's `.jcron/` folder, to be committed with the branch so another dev can pick it up.
+- A finished shared job keeps its file. Session start lists it as ready to delete, once the user has committed the done state.
+
 ## 0.2.0 (2026-11-16)
 
 ### Changed

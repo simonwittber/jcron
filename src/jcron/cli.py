@@ -43,8 +43,11 @@ def cmd_add(args) -> None:
         folder=folder,
         branch=branch,
         global_todo=args.global_todo,
+        shared=args.shared,
     )
     print(f"Added {display.line(job, now())}")
+    if args.shared:
+        print(f"Saved in {job.path}. Commit it with the branch so others get it.")
 
 
 def cmd_list(args) -> None:
@@ -78,6 +81,10 @@ def cmd_due(args) -> None:
     todo_text = display.todo_report(store.todos(here, at), at)
     if todo_text:
         print(f"\n{todo_text}")
+    if here is not None:
+        finished_text = display.finished_report(store.finished_shared(here))
+        if finished_text:
+            print(f"\n{finished_text}")
 
 
 def cmd_todos(args) -> None:
@@ -88,7 +95,7 @@ def cmd_todos(args) -> None:
 
 def cmd_claim(args) -> None:
     job = store.claim(args.id, _session(args))
-    print(f"Claimed {job.id} as {job.claimed_by}.\n")
+    print(f"Claimed {job.id} as {job.claimed_by}.\n" if job.claimed_by else f"{job.id} is a shared job, so there is no claim to make.\n")
     print(display.full(job, now()), end="")
 
 
@@ -178,6 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--folder", help="project folder (default: current directory)")
     p.add_argument("--branch", help="git branch (default: current branch, if any)")
     p.add_argument("--global", dest="global_todo", action="store_true", help="TODOs: show in every folder")
+    p.add_argument("--shared", action="store_true", help="save in the repo's .jcron/ folder, to be committed with the branch")
     _add_notes_options(p)
     p.set_defaults(func=cmd_add)
 

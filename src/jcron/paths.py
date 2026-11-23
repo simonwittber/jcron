@@ -4,6 +4,10 @@ import os
 from pathlib import Path
 
 
+# The folder inside a repo that holds shared jobs, committed with the branch.
+SHARED_DIRNAME = ".jcron"
+
+
 def home() -> Path:
     override = os.environ.get("JCRON_HOME")
     return Path(override).expanduser() if override else Path.home() / ".jcron"
